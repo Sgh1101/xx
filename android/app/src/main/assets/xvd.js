@@ -86,6 +86,8 @@
     s.textContent =
       ".xvd-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;border-radius:9999px;background:transparent;color:#8b98a5;}" +
       ".xvd-btn:active{background:rgba(77,163,255,.18);color:#4da3ff;}" +
+      "#xvd-pop{position:fixed;left:12px;bottom:84px;z-index:99999;padding:8px 14px;border-radius:9999px;border:1px solid #4da3ff;background:rgba(20,24,29,.94);color:#fff;font:700 13px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.55);}" +
+      "#xvd-pop:active{background:#4da3ff;}" +
       "#xvd-panel{position:fixed;right:12px;bottom:84px;z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;font:600 14px system-ui,sans-serif;}" +
       "#xvd-panel button{padding:11px 16px;border:0;border-radius:9999px;color:#fff;font:700 14px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.5);background:linear-gradient(90deg,#3b82f6,#8b5cf6);}" +
       "#xvd-panel button.alt{background:#1c2128;border:1px solid #262c34;}" +
@@ -116,6 +118,71 @@
       bar.appendChild(btn);
     });
   }
+
+  // ---- 지금 보고 있는 영상 트윗용 작은 팝업 ----
+  function statusInfo(href) {
+    var m = (href || "").match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)/);
+    return m ? { user: m[1], id: m[2] } : null;
+  }
+  function articleInfo(a) {
+    var tm = a.querySelector('a[href*="/status/"] time');
+    var link = tm && tm.closest("a");
+    return link && statusInfo(link.getAttribute("href"));
+  }
+  function currentTweet() {
+    var m = location.pathname.match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)/);
+    var arts = document.querySelectorAll('article[data-testid="tweet"]');
+    var i, a, info;
+    if (m) { // 게시물 상세: 주인공 트윗에 영상이 있으면
+      for (i = 0; i < arts.length; i++) {
+        a = arts[i]; info = articleInfo(a);
+        if (info && info.id === m[2] && (a.querySelector("video") || tweets[m[2]])) return { user: m[1], id: m[2] };
+      }
+      if (tweets[m[2]]) return { user: m[1], id: m[2] };
+    }
+    // 타임라인: 화면 가운데에 가장 가까운 영상 트윗
+    var best = null, bestD = 1e9, vh = window.innerHeight;
+    for (i = 0; i < arts.length; i++) {
+      a = arts[i];
+      var v = a.querySelector("video");
+      if (!v) continue;
+      var r = v.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > vh || r.height < 40) continue;
+      var d = Math.abs((r.top + r.bottom) / 2 - vh / 2);
+      info = articleInfo(a);
+      if (info && d < bestD) { best = info; bestD = d; }
+    }
+    return best;
+  }
+
+  var pop = null;
+  function renderPop() {
+    var cur = currentTweet();
+    if (!cur) { if (pop) pop.style.display = "none"; return; }
+    if (!document.body) return;
+    if (!pop) {
+      pop = document.createElement("button");
+      pop.id = "xvd-pop";
+      pop.addEventListener("click", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var c = pop._cur;
+        if (!c) return;
+        var tw = tweets[c.id];
+        if (tw) send(files(tw));
+        else if (window.XVDBridge) window.XVDBridge.downloadTweet(c.id, c.user); // 가로채기 실패 시 앱이 직접 찾아서 받음
+      });
+      document.body.appendChild(pop);
+    }
+    pop._cur = cur;
+    pop.style.display = "";
+    var tw = tweets[cur.id];
+    pop.textContent = "⬇ 영상 받기" + (tw && tw.videos.length > 1 ? " (" + tw.videos.length + ")" : "");
+  }
+  var lastScroll = 0;
+  window.addEventListener("scroll", function () {
+    var n = Date.now();
+    if (n - lastScroll > 250) { lastScroll = n; renderPop(); }
+  }, { passive: true, capture: true });
 
   // ---- 프로필 일괄 다운로드 패널 ----
   var RESERVED = ["home", "explore", "notifications", "messages", "i", "search", "settings", "compose", "tos", "privacy"];
@@ -181,7 +248,7 @@
   var timer;
   function schedule() {
     clearTimeout(timer);
-    timer = setTimeout(function () { addStyle(); decorate(); renderPanel(); }, 150);
+    timer = setTimeout(function () { addStyle(); decorate(); renderPanel(); renderPop(); }, 150);
   }
   function start() {
     new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });

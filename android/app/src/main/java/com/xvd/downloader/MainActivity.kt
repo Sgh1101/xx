@@ -318,7 +318,7 @@ class MainActivity : AppCompatActivity() {
         if (useDocStart) {
             WebViewCompat.addDocumentStartJavaScript(
                 webView, script,
-                setOf("https://x.com", "https://twitter.com", "https://mobile.twitter.com")
+                setOf("https://x.com", "https://www.x.com", "https://mobile.x.com", "https://twitter.com", "https://mobile.twitter.com")
             )
         }
 
@@ -354,6 +354,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class Bridge {
+        /** 팝업에서 호출: 가로챈 데이터가 없을 때 트윗 번호로 직접 영상을 찾아 받기 */
+        @JavascriptInterface
+        fun downloadTweet(id: String, user: String) {
+            if (!id.matches(Regex("\\d{5,25}"))) return
+            io.execute {
+                val r = runCatching { TweetFetcher.fetch(id) }
+                r.onSuccess { tw ->
+                    var added = 0
+                    val who = tw.user.ifBlank { user }.replace(Regex("[^A-Za-z0-9_]"), "_")
+                    tw.medias.forEachIndexed { idx, media ->
+                        val v = Settings.pick(this@MainActivity, media.variants) ?: return@forEachIndexed
+                        val suffix = if (tw.medias.size > 1) "_${idx + 1}" else ""
+                        if (Downloads.enqueue(this@MainActivity, v.url, "${who}_${id}$suffix.mp4")) added++
+                    }
+                    ui.post { toast(if (added > 0) "${added}개를 기록 탭에 추가했어요" else "이미 받았거나 받는 중이에요") }
+                }.onFailure { e ->
+                    ui.post { toast(e.message ?: "영상을 찾지 못했어요") }
+                }
+            }
+        }
+
         @JavascriptInterface
         fun download(json: String) {
             val arr = runCatching { JSONArray(json) }.getOrNull() ?: return
