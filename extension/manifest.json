@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "X 영상 다운로더",
+  "version": "1.0.0",
+  "description": "X(트위터)에서 영상 트윗마다 다운로드 버튼을 달고, 계정 페이지에서는 영상을 한 번에 받습니다.",
+  "permissions": ["downloads"],
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://video.twimg.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

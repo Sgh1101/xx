@@ -1,0 +1,8 @@
+.xvd-btn { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:9999px; border:0; background:transparent; color:rgb(113,118,123); cursor:pointer; }
+.xvd-btn:hover { background:rgba(29,155,240,.1); color:rgb(29,155,240); }
+.xvd-btn svg { width:18px; height:18px; fill:currentColor; }
+#xvd-panel { position:fixed; right:16px; bottom:16px; z-index:99999; display:flex; flex-direction:column; gap:6px; align-items:flex-end; font:14px system-ui,sans-serif; }
+#xvd-panel button { padding:10px 14px; border:0; border-radius:9999px; background:#1d9bf0; color:#fff; font-weight:700; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.35); }
+#xvd-panel button:disabled { opacity:.6; cursor:default; }
+#xvd-panel button.alt { background:#333; }
+#xvd-panel .info { padding:4px 10px; border-radius:9999px; background:rgba(0,0,0,.75); color:#fff; font-size:12px; }
