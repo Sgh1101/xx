@@ -11,8 +11,18 @@ android {
         applicationId = "com.xvd.downloader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.2"
+    }
+
+    // 빌드마다 서명이 바뀌면 덮어 설치가 안 되므로 디버그 키를 고정
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
