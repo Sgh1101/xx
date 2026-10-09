@@ -26,7 +26,7 @@
         var mp4 = m.video_info.variants
           .filter(function (v) { return v.content_type === "video/mp4" && v.url; })
           .sort(function (a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
-        if (mp4.length) videos.push({ url: mp4[0].url, gif: m.type === "animated_gif" });
+        if (mp4.length) videos.push({ url: mp4[0].url, gif: m.type === "animated_gif", variants: mp4.map(function (v) { return { url: v.url, bitrate: v.bitrate || 0 }; }) });
       });
       if (videos.length) out.push({ id: node.rest_id, user: screenName(node), videos: videos, rtBy: rtBy ? [rtBy] : [] });
     }
@@ -71,7 +71,7 @@
 
   function files(t) {
     return t.videos.map(function (v, i) {
-      return { url: v.url, filename: (t.user || "unknown") + "_" + t.id + (t.videos.length > 1 ? "_" + (i + 1) : "") + ".mp4" };
+      return { url: v.url, variants: v.variants, filename: (t.user || "unknown") + "_" + t.id + (t.videos.length > 1 ? "_" + (i + 1) : "") + ".mp4" };
     });
   }
   function send(items) {

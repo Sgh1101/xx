@@ -26,6 +26,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -55,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var results: LinearLayout
     private lateinit var hint: View
     private lateinit var pageHistory: View
+    private lateinit var pageSettings: View
+    private lateinit var btnWifi: TextView
     private lateinit var historyList: LinearLayout
 
     private val io = Executors.newCachedThreadPool()
@@ -79,6 +82,8 @@ class MainActivity : AppCompatActivity() {
         results = findViewById(R.id.results)
         hint = findViewById(R.id.hint)
         pageHistory = findViewById(R.id.pageHistory)
+        pageSettings = findViewById(R.id.pageSettings)
+        btnWifi = findViewById(R.id.btnWifi)
         historyList = findViewById(R.id.historyList)
 
         Downloads.init(this)
@@ -96,6 +101,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.tabLink).setOnClickListener { selectTab(0) }
         findViewById<View>(R.id.tabWeb).setOnClickListener { selectTab(1) }
         findViewById<View>(R.id.tabHistory).setOnClickListener { selectTab(2) }
+        findViewById<View>(R.id.tabSettings).setOnClickListener { selectTab(3) }
+        btnWifi.setOnClickListener { setWifiOnly(!Settings.wifiOnly(this)) }
         findViewById<View>(R.id.btnPauseAll).setOnClickListener { Downloads.pauseAll() }
         findViewById<View>(R.id.btnResumeAll).setOnClickListener { Downloads.resumeAll() }
         findViewById<View>(R.id.btnCancelAll).setOnClickListener { Downloads.cancelAll() }
@@ -115,6 +122,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupWebView()
+        setupSettings()
         selectTab(0)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -133,11 +141,13 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         Downloads.addListener(historyListener)
+        Downloads.resumeFromBackground()
         if (tab == 2) renderHistory(true)
     }
 
     override fun onStop() {
         Downloads.removeListener(historyListener)
+        if (!Settings.background(this)) Downloads.pauseForBackground()
         super.onStop()
     }
 
@@ -162,9 +172,11 @@ class MainActivity : AppCompatActivity() {
         pageLink.visibility = if (t == 0) View.VISIBLE else View.GONE
         pageWeb.visibility = if (t == 1) View.VISIBLE else View.GONE
         pageHistory.visibility = if (t == 2) View.VISIBLE else View.GONE
+        pageSettings.visibility = if (t == 3) View.VISIBLE else View.GONE
         styleTab(R.id.tabLink, R.id.tabLinkIcon, R.id.tabLinkText, t == 0)
         styleTab(R.id.tabWeb, R.id.tabWebIcon, R.id.tabWebText, t == 1)
         styleTab(R.id.tabHistory, R.id.tabHistoryIcon, R.id.tabHistoryText, t == 2)
+        styleTab(R.id.tabSettings, R.id.tabSettingsIcon, R.id.tabSettingsText, t == 3)
         if (t == 1 && !webLoaded) {
             webLoaded = true
             webView.loadUrl("https://x.com/")
@@ -225,6 +237,7 @@ class MainActivity : AppCompatActivity() {
     private fun render(tweet: TweetFetcher.Tweet) {
         hint.visibility = View.GONE
         results.removeAllViews()
+        if (Settings.autoStart(this)) autoDownload(tweet)
         tweet.medias.forEachIndexed { idx, media ->
             val card = LayoutInflater.from(this).inflate(R.layout.item_video, results, false)
             card.findViewById<TextView>(R.id.title).text = tweet.text.ifBlank { "@${tweet.user}" }
@@ -256,6 +269,17 @@ class MainActivity : AppCompatActivity() {
             }
             results.addView(card)
         }
+    }
+
+    /** 설정의 화질 규칙대로 영상마다 하나씩 골라 바로 받기 */
+    private fun autoDownload(tweet: TweetFetcher.Tweet) {
+        var added = 0
+        tweet.medias.forEachIndexed { idx, media ->
+            val v = Settings.pick(this, media.variants) ?: return@forEachIndexed
+            val suffix = if (tweet.medias.size > 1) "_${idx + 1}" else ""
+            if (Downloads.enqueue(this, v.url, "${tweet.user}_${tweet.id}$suffix.mp4")) added++
+        }
+        toast(if (added > 0) "${added}개를 기록 탭에 추가했어요" else "이미 받았거나 받는 중이에요")
     }
 
     private fun loadImage(url: String, target: ImageView) {
@@ -323,6 +347,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** xvd.js 가 호출하는 다리. X 페이지에서 오는 호출이므로 주소를 엄격히 검증한다. */
+    private fun variantOf(url: String, bitrate: Int): TweetFetcher.Variant {
+        val m = Regex("""/(\d{2,4})x(\d{2,4})/""").find(url)
+        val h = m?.let { minOf(it.groupValues[1].toInt(), it.groupValues[2].toInt()) } ?: 0
+        return TweetFetcher.Variant(url, h, bitrate)
+    }
+
     inner class Bridge {
         @JavascriptInterface
         fun download(json: String) {
@@ -330,10 +360,20 @@ class MainActivity : AppCompatActivity() {
             var added = 0
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
-                val url = o.optString("url")
                 val name = o.optString("filename").replace(Regex("[^A-Za-z0-9._-]"), "_")
-                if (!url.startsWith("https://video.twimg.com/") || name.isBlank()) continue
-                if (Downloads.enqueue(this@MainActivity, url, name)) added++
+                val cands = ArrayList<TweetFetcher.Variant>()
+                val vs = o.optJSONArray("variants")
+                if (vs != null) {
+                    for (j in 0 until vs.length()) {
+                        val v = vs.optJSONObject(j) ?: continue
+                        cands.add(variantOf(v.optString("url"), v.optInt("bitrate")))
+                    }
+                } else {
+                    cands.add(variantOf(o.optString("url"), 0))
+                }
+                val pick = Settings.pick(this@MainActivity, cands.filter { it.url.startsWith("https://video.twimg.com/") })
+                if (pick == null || name.isBlank()) continue
+                if (Downloads.enqueue(this@MainActivity, pick.url, name)) added++
             }
             val skipped = arr.length() - added
             ui.post {
@@ -355,7 +395,13 @@ class MainActivity : AppCompatActivity() {
         return when (t.state) {
             Downloads.State.QUEUED -> "대기 중"
             Downloads.State.RUNNING -> (if (pct >= 0) "받는 중 $pct%  ·  " else "받는 중  ·  ") + size
-            Downloads.State.PAUSED -> "일시정지" + (if (pct >= 0) " $pct%" else "") + "  ·  " + size
+            Downloads.State.PAUSED -> (
+                when {
+                    t.waitNet -> "Wi-Fi 연결을 기다리는 중"
+                    t.waitBg -> "앱 밖에서는 일시정지"
+                    else -> "일시정지"
+                }
+                ) + (if (pct >= 0) " $pct%" else "") + "  ·  " + size
             Downloads.State.DONE -> "완료  ·  " + mb(if (t.total > 0) t.total else t.bytes)
             Downloads.State.FAILED -> "실패: ${t.error ?: "알 수 없는 오류"}"
             Downloads.State.CANCELED -> "중지됨"
@@ -413,7 +459,10 @@ class MainActivity : AppCompatActivity() {
         action.setOnClickListener {
             when (t.state) {
                 Downloads.State.DONE -> openVideo(t)
-                else -> if (active) Downloads.pause(t.id) else Downloads.resume(t.id)
+                else -> if (active) Downloads.pause(t.id) else {
+                    if (!Downloads.canDownloadNow()) toast("Wi-Fi 전용이라 Wi-Fi에 연결되면 시작돼요")
+                    Downloads.resume(t.id)
+                }
             }
         }
         cancel.setOnClickListener { Downloads.cancel(t.id) }
@@ -435,6 +484,66 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             toast("재생할 수 없어요 (파일이 지워졌을 수 있어요)")
         }
+    }
+
+    // ---------------- 설정 ----------------
+
+    private fun updateWifiChip() {
+        val on = Settings.wifiOnly(this)
+        btnWifi.text = if (on) "📶 Wi-Fi만: 켜짐" else "📶 Wi-Fi만: 꺼짐"
+        btnWifi.setTextColor(ContextCompat.getColor(this, if (on) R.color.accent else R.color.muted))
+    }
+
+    private fun setWifiOnly(on: Boolean) {
+        Settings.setWifiOnly(this, on)
+        findViewById<SwitchCompat>(R.id.swWifi).isChecked = on
+        updateWifiChip()
+        Downloads.recheckNetwork()
+        toast(if (on) "Wi-Fi에서만 받아요" else "모바일 데이터로도 받아요")
+    }
+
+    /** 조각난 선택 버튼(세그먼트) 만들기 */
+    private fun segmented(container: LinearLayout, labels: List<String>, selected: Int, onPick: (Int) -> Unit) {
+        container.removeAllViews()
+        labels.forEachIndexed { i, label ->
+            container.addView(TextView(this).apply {
+                text = label
+                gravity = Gravity.CENTER
+                textSize = 13f
+                setTextColor(ContextCompat.getColor(context, if (i == selected) R.color.text else R.color.muted))
+                if (i == selected) setBackgroundResource(R.drawable.bg_tab_selected) else background = null
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                setOnClickListener {
+                    onPick(i)
+                    segmented(container, labels, i, onPick)
+                }
+            })
+        }
+    }
+
+    private fun setupSettings() {
+        val swWifi = findViewById<SwitchCompat>(R.id.swWifi)
+        val swBg = findViewById<SwitchCompat>(R.id.swBg)
+        val swAuto = findViewById<SwitchCompat>(R.id.swAuto)
+        swWifi.isChecked = Settings.wifiOnly(this)
+        swBg.isChecked = Settings.background(this)
+        swAuto.isChecked = Settings.autoStart(this)
+        swWifi.setOnCheckedChangeListener { v, on -> if (v.isPressed) setWifiOnly(on) }
+        swBg.setOnCheckedChangeListener { _, on -> Settings.setBackground(this, on) }
+        swAuto.setOnCheckedChangeListener { _, on -> Settings.setAutoStart(this, on) }
+        updateWifiChip()
+
+        val qValues = listOf(0, 1080, 720, 480)
+        segmented(
+            findViewById(R.id.segQuality), listOf("최대", "1080p", "720p", "480p"),
+            qValues.indexOf(Settings.quality(this)).coerceAtLeast(0)
+        ) { Settings.setQuality(this, qValues[it]) }
+
+        val cValues = listOf(1, 2, 3, 5)
+        segmented(
+            findViewById(R.id.segConcurrent), listOf("1개", "2개", "3개", "5개"),
+            cValues.indexOf(Settings.concurrent(this)).let { if (it < 0) 2 else it }
+        ) { Settings.setConcurrent(this, cValues[it]) }
     }
 
     // ---------------- 유틸 ----------------

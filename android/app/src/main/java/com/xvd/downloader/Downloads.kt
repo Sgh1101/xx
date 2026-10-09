@@ -3,6 +3,9 @@ package com.xvd.downloader
 import android.content.ContentValues
 import android.content.Context
 import android.media.MediaScannerConnection
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -35,6 +38,9 @@ object Downloads {
         @Volatile var uri: String? = null
         @Volatile var gen = 0 // 일시정지/취소/재개 때마다 증가 → 이전 작업 스레드가 스스로 종료
         @Volatile var conn: HttpURLConnection? = null
+        @Volatile var waitNet = false // Wi-Fi 전용이라 연결을 기다리는 중
+        @Volatile var waitBg = false  // 백그라운드 금지 설정으로 멈춘 상태
+        @Volatile var submitted = false // 실행 슬롯을 점유 중 (동시 다운로드 수 제한용)
         val runLock = ReentrantLock() // 같은 파일을 두 스레드가 동시에 쓰지 않도록
     }
 
@@ -43,7 +49,7 @@ object Downloads {
 
     private val lock = Any()
     private val tasks = ArrayList<Task>() // 최신순
-    private val pool = Executors.newFixedThreadPool(3)
+    private val pool = Executors.newCachedThreadPool()
     private val main = Handler(Looper.getMainLooper())
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private var loaded = false
@@ -57,6 +63,7 @@ object Downloads {
             if (loaded) return
             app = ctx.applicationContext
             loaded = true
+            registerNetworkCallback()
             val arr = runCatching {
                 JSONArray(app.getSharedPreferences("xvd", Context.MODE_PRIVATE).getString(KEY, "[]"))
             }.getOrDefault(JSONArray())
@@ -86,6 +93,70 @@ object Downloads {
             }
         }
         app.getSharedPreferences("xvd", Context.MODE_PRIVATE).edit().putString(KEY, arr.toString()).apply()
+    }
+
+    // ---------------- 네트워크 (Wi-Fi 전용) ----------------
+
+    private fun isWifi(): Boolean {
+        val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return false) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    /** Wi-Fi 전용 설정이 꺼져 있거나 Wi-Fi 에 연결돼 있으면 true */
+    fun canDownloadNow(): Boolean = !Settings.wifiOnly(app) || isWifi()
+
+    private fun registerNetworkCallback() {
+        runCatching {
+            val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = recheckNetwork()
+                override fun onLost(network: Network) = recheckNetwork()
+            })
+        }
+    }
+
+    /** 네트워크가 바뀌었거나 Wi-Fi 설정이 바뀌었을 때: 멈추거나 자동으로 이어받기 */
+    fun recheckNetwork() {
+        if (!loaded) return
+        val ok = canDownloadNow()
+        val resumeIds = ArrayList<String>()
+        synchronized(lock) {
+            for (t in tasks) {
+                if (!ok && (t.state == State.QUEUED || t.state == State.RUNNING)) {
+                    t.state = State.PAUSED
+                    t.waitNet = true
+                    abort(t)
+                } else if (ok && t.waitNet && t.state == State.PAUSED) {
+                    resumeIds.add(t.id)
+                }
+            }
+        }
+        resumeIds.forEach { resume(it) }
+        save(); changed(true)
+    }
+
+    // ---------------- 백그라운드 설정 ----------------
+
+    fun pauseForBackground() {
+        var any = false
+        synchronized(lock) {
+            for (t in tasks) {
+                if (t.state == State.QUEUED || t.state == State.RUNNING) {
+                    t.state = State.PAUSED
+                    t.waitBg = true
+                    abort(t)
+                    any = true
+                }
+            }
+        }
+        if (any) { save(); changed(true) }
+    }
+
+    fun resumeFromBackground() {
+        val ids = synchronized(lock) { tasks.filter { it.waitBg && it.state == State.PAUSED }.map { it.id } }
+        ids.forEach { resume(it) }
     }
 
     // ---------------- 조회 / 리스너 ----------------
@@ -152,6 +223,8 @@ object Downloads {
             if (t.state == State.CANCELED) { t.bytes = 0; t.total = 0 }
             t.state = State.QUEUED
             t.error = null
+            t.waitNet = false
+            t.waitBg = false
             t.gen++
         }
         save(); submit(t); changed(true)
@@ -189,9 +262,31 @@ object Downloads {
 
     // ---------------- 실제 다운로드 ----------------
 
-    private fun submit(t: Task) {
-        val g = t.gen
-        pool.execute { run(t, g) }
+    /** 대기 중인 작업을 동시 다운로드 수 한도 안에서 오래된 순으로 시작 */
+    private fun submit(@Suppress("UNUSED_PARAMETER") t: Task) = pump()
+
+    private fun pump() {
+        val start = ArrayList<Pair<Task, Int>>()
+        var blocked = false
+        synchronized(lock) {
+            val wifiBlock = !canDownloadNow()
+            var slots = Settings.concurrent(app) - tasks.count { it.submitted }
+            for (t in tasks.asReversed()) {
+                if (t.state != State.QUEUED || t.submitted) continue
+                if (wifiBlock) { // Wi-Fi 전용인데 Wi-Fi 가 아님 → 연결될 때까지 대기
+                    t.state = State.PAUSED
+                    t.waitNet = true
+                    blocked = true
+                    continue
+                }
+                if (slots <= 0) continue
+                t.submitted = true
+                slots--
+                start.add(t to t.gen)
+            }
+        }
+        if (blocked) { save(); changed(true) }
+        start.forEach { (t, g) -> pool.execute { run(t, g) } }
     }
 
     private fun partFile(t: Task): File {
@@ -267,7 +362,9 @@ object Downloads {
         } finally {
             t.conn?.let { c -> runCatching { c.disconnect() } }
             t.conn = null
+            synchronized(lock) { t.submitted = false }
             t.runLock.unlock()
+            pump()
         }
     }
 
