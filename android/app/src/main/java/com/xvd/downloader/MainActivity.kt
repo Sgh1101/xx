@@ -2,7 +2,6 @@ package com.xvd.downloader
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -63,15 +62,8 @@ class MainActivity : AppCompatActivity() {
     private var tab = 0
     private var webLoaded = false
     private var busy = false
-    private var historyBusy = false
-    private val historyTick = object : Runnable {
-        override fun run() {
-            if (tab == 2 && historyBusy) {
-                renderHistory()
-                ui.postDelayed(this, 1500)
-            }
-        }
-    }
+    private var renderedSig = ""
+    private val historyListener: () -> Unit = { if (tab == 2) renderHistory(false) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,6 +81,12 @@ class MainActivity : AppCompatActivity() {
         pageHistory = findViewById(R.id.pageHistory)
         historyList = findViewById(R.id.historyList)
 
+        Downloads.init(this)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+        }
         if (Build.VERSION.SDK_INT <= 28 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -98,10 +96,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.tabLink).setOnClickListener { selectTab(0) }
         findViewById<View>(R.id.tabWeb).setOnClickListener { selectTab(1) }
         findViewById<View>(R.id.tabHistory).setOnClickListener { selectTab(2) }
-        findViewById<View>(R.id.btnClearHistory).setOnClickListener {
-            History.clear(this)
-            renderHistory()
-        }
+        findViewById<View>(R.id.btnPauseAll).setOnClickListener { Downloads.pauseAll() }
+        findViewById<View>(R.id.btnResumeAll).setOnClickListener { Downloads.resumeAll() }
+        findViewById<View>(R.id.btnCancelAll).setOnClickListener { Downloads.cancelAll() }
+        findViewById<View>(R.id.btnClearHistory).setOnClickListener { Downloads.clearFinished() }
         findViewById<View>(R.id.btnPaste).setOnClickListener { pasteFromClipboard() }
         btnFetch.setOnClickListener { fetch() }
         input.setOnEditorActionListener { _, actionId, _ ->
@@ -132,6 +130,17 @@ class MainActivity : AppCompatActivity() {
         handleIntent(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        Downloads.addListener(historyListener)
+        if (tab == 2) renderHistory(true)
+    }
+
+    override fun onStop() {
+        Downloads.removeListener(historyListener)
+        super.onStop()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
@@ -160,8 +169,7 @@ class MainActivity : AppCompatActivity() {
             webLoaded = true
             webView.loadUrl("https://x.com/")
         }
-        ui.removeCallbacks(historyTick)
-        if (t == 2) renderHistory()
+        if (t == 2) renderHistory(true)
     }
 
     private fun styleTab(tabId: Int, iconId: Int, textId: Int, selected: Boolean) {
@@ -262,20 +270,9 @@ class MainActivity : AppCompatActivity() {
     // ---------------- 다운로드 ----------------
 
     private fun download(url: String, filename: String): Boolean {
-        return try {
-            val req = DownloadManager.Request(Uri.parse(url))
-                .setTitle(filename)
-                .setMimeType("video/mp4")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "X-Videos/$filename")
-            val dmId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
-            History.add(this, History.Entry(dmId, filename, System.currentTimeMillis()))
-            toast("다운로드 시작: Download/X-Videos")
-            true
-        } catch (e: Exception) {
-            toast("다운로드 실패: ${e.message}")
-            false
-        }
+        val added = Downloads.enqueue(this, url, filename)
+        toast(if (added) "기록 탭에 추가했어요" else "이미 받았거나 받는 중이에요")
+        return added
     }
 
     // ---------------- X 브라우저 (계정 일괄 다운로드) ----------------
@@ -330,95 +327,113 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun download(json: String) {
             val arr = runCatching { JSONArray(json) }.getOrNull() ?: return
-            var ok = 0
+            var added = 0
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
                 val url = o.optString("url")
                 val name = o.optString("filename").replace(Regex("[^A-Za-z0-9._-]"), "_")
                 if (!url.startsWith("https://video.twimg.com/") || name.isBlank()) continue
-                var started = false
-                // DownloadManager 는 아무 스레드에서나 호출 가능하지만 토스트는 UI 스레드
-                try {
-                    val req = DownloadManager.Request(Uri.parse(url))
-                        .setTitle(name)
-                        .setMimeType("video/mp4")
-                        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "X-Videos/$name")
-                    val dmId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
-                    History.add(this@MainActivity, History.Entry(dmId, name, System.currentTimeMillis()))
-                    started = true
-                } catch (_: Exception) {
-                }
-                if (started) ok++
+                if (Downloads.enqueue(this@MainActivity, url, name)) added++
             }
+            val skipped = arr.length() - added
             ui.post {
-                toast("$ok/${arr.length()}개 다운로드 시작 (Download/X-Videos)")
-                if (tab == 2) renderHistory()
+                toast(
+                    if (added > 0) "${added}개를 기록 탭에 추가했어요" + if (skipped > 0) " (${skipped}개는 이미 있음)" else ""
+                    else "이미 받았거나 받는 중이에요"
+                )
             }
         }
     }
 
     // ---------------- 기록 ----------------
 
-    private fun statusOf(id: Long): Int {
-        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
-            if (c.moveToFirst()) return c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+    private fun mb(b: Long) = "%.1fMB".format(b / 1_048_576.0)
+
+    private fun statusText(t: Downloads.Task): String {
+        val pct = if (t.total > 0) (t.bytes * 100 / t.total).toInt() else -1
+        val size = if (t.total > 0) "${mb(t.bytes)} / ${mb(t.total)}" else mb(t.bytes)
+        return when (t.state) {
+            Downloads.State.QUEUED -> "대기 중"
+            Downloads.State.RUNNING -> (if (pct >= 0) "받는 중 $pct%  ·  " else "받는 중  ·  ") + size
+            Downloads.State.PAUSED -> "일시정지" + (if (pct >= 0) " $pct%" else "") + "  ·  " + size
+            Downloads.State.DONE -> "완료  ·  " + mb(if (t.total > 0) t.total else t.bytes)
+            Downloads.State.FAILED -> "실패: ${t.error ?: "알 수 없는 오류"}"
+            Downloads.State.CANCELED -> "중지됨"
         }
-        return -1
     }
 
-    private fun renderHistory() {
-        val entries = History.load(this)
-        historyList.removeAllViews()
-        historyBusy = false
-        if (entries.isEmpty()) {
-            historyList.addView(TextView(this).apply {
-                text = "아직 받은 영상이 없어요"
-                setTextColor(ContextCompat.getColor(context, R.color.muted))
-                textSize = 14f
-                gravity = Gravity.CENTER
-                setPadding(0, dp(80), 0, 0)
-            })
-            return
+    private fun renderHistory(force: Boolean) {
+        val list = Downloads.snapshot()
+        val sig = list.joinToString(",") { it.id + it.state.name }
+        val rebuild = force || sig != renderedSig
+        if (rebuild) {
+            renderedSig = sig
+            historyList.removeAllViews()
+            if (list.isEmpty()) {
+                historyList.addView(TextView(this).apply {
+                    text = "아직 받은 영상이 없어요"
+                    setTextColor(ContextCompat.getColor(context, R.color.muted))
+                    textSize = 14f
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(80), 0, 0)
+                })
+                return
+            }
         }
         val fmt = SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA)
-        entries.forEach { e ->
-            val st = statusOf(e.id)
-            val row = LayoutInflater.from(this).inflate(R.layout.item_history, historyList, false)
-            row.findViewById<TextView>(R.id.hTitle).text = e.name
-            row.findViewById<TextView>(R.id.hSub).text = fmt.format(Date(e.time))
-            val chip = row.findViewById<TextView>(R.id.hStatus)
-            val (label, colorRes) = when (st) {
-                DownloadManager.STATUS_SUCCESSFUL -> "▶ 재생" to R.color.accent
-                DownloadManager.STATUS_FAILED -> "실패" to R.color.danger
-                -1 -> "삭제됨" to R.color.muted
-                else -> { historyBusy = true; "받는 중…" to R.color.muted }
-            }
-            chip.text = label
-            chip.setTextColor(ContextCompat.getColor(this, colorRes))
-            row.setOnClickListener { if (st == DownloadManager.STATUS_SUCCESSFUL) openVideo(e.id) else if (st == -1) toast("파일이 없어요") }
-            row.setOnLongClickListener {
-                History.remove(this, e.id)
-                renderHistory()
-                true
-            }
-            historyList.addView(row)
+        list.forEachIndexed { i, t ->
+            val row: View = if (rebuild) {
+                LayoutInflater.from(this).inflate(R.layout.item_history, historyList, false).also {
+                    it.tag = t.id
+                    historyList.addView(it)
+                    bindRow(it, t)
+                }
+            } else historyList.getChildAt(i)
+            row.findViewById<TextView>(R.id.hSub).text = fmt.format(Date(t.time)) + "  ·  " + statusText(t)
+            val bar = row.findViewById<ProgressBar>(R.id.hProgress)
+            bar.visibility = if (t.state == Downloads.State.DONE || t.state == Downloads.State.CANCELED) View.GONE else View.VISIBLE
+            bar.progress = if (t.total > 0) (t.bytes * 1000 / t.total).toInt() else 0
         }
-        if (historyBusy) ui.postDelayed(historyTick, 1500)
     }
 
-    private fun openVideo(id: Long) {
-        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val uri = dm.getUriForDownloadedFile(id)
-        if (uri == null) { toast("파일을 열 수 없어요"); return }
+    /** 행의 제목과 버튼(상태가 바뀔 때만 다시 만들어짐) */
+    private fun bindRow(row: View, t: Downloads.Task) {
+        row.findViewById<TextView>(R.id.hTitle).text = t.name
+        val action = row.findViewById<TextView>(R.id.hAction)
+        val cancel = row.findViewById<TextView>(R.id.hCancel)
+        val active = t.state == Downloads.State.QUEUED || t.state == Downloads.State.RUNNING
+        action.text = when (t.state) {
+            Downloads.State.QUEUED, Downloads.State.RUNNING -> "⏸ 일시정지"
+            Downloads.State.PAUSED -> "▶ 이어받기"
+            Downloads.State.DONE -> "▶ 재생"
+            Downloads.State.FAILED -> "↻ 재시도"
+            Downloads.State.CANCELED -> "↻ 다시 받기"
+        }
+        cancel.visibility = if (t.state == Downloads.State.DONE || t.state == Downloads.State.CANCELED) View.GONE else View.VISIBLE
+        action.setOnClickListener {
+            when (t.state) {
+                Downloads.State.DONE -> openVideo(t)
+                else -> if (active) Downloads.pause(t.id) else Downloads.resume(t.id)
+            }
+        }
+        cancel.setOnClickListener { Downloads.cancel(t.id) }
+        row.setOnClickListener { if (t.state == Downloads.State.DONE) openVideo(t) }
+        row.setOnLongClickListener {
+            Downloads.remove(t.id)
+            true
+        }
+    }
+
+    private fun openVideo(t: Downloads.Task) {
+        val uri = t.uri?.let { Uri.parse(it) }
+        if (uri == null) { toast("파일을 열 수 없어요. 잠시 후 다시 눌러 보세요"); return }
         try {
             startActivity(
                 Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4")
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             )
         } catch (e: Exception) {
-            toast("재생할 앱이 없어요")
+            toast("재생할 수 없어요 (파일이 지워졌을 수 있어요)")
         }
     }
 

@@ -185,46 +185,97 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <LinearLayout
-                android:layout_width="match_parent"
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="20dp"
                 android:layout_marginTop="32dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="기록"
-                    android:textColor="@color/text"
-                    android:textSize="28sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/btnClearHistory"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_chip"
-                    android:paddingStart="14dp"
-                    android:paddingTop="8dp"
-                    android:paddingEnd="14dp"
-                    android:paddingBottom="8dp"
-                    android:text="전체 삭제"
-                    android:textColor="@color/muted"
-                    android:textSize="13sp" />
-            </LinearLayout>
+                android:text="기록"
+                android:textColor="@color/text"
+                android:textSize="28sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="20dp"
                 android:layout_marginTop="4dp"
-                android:text="누르면 재생, 길게 누르면 기록에서 지워요"
+                android:text="완료된 항목을 누르면 재생, 길게 누르면 기록에서 지워요"
                 android:textColor="@color/muted"
                 android:textSize="13sp" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:overScrollMode="never"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="12dp">
+
+                    <TextView
+                        android:id="@+id/btnPauseAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_chip"
+                        android:paddingStart="14dp"
+                        android:paddingTop="9dp"
+                        android:paddingEnd="14dp"
+                        android:paddingBottom="9dp"
+                        android:text="⏸ 전체 일시정지"
+                        android:textColor="@color/muted"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        android:id="@+id/btnResumeAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_chip"
+                        android:paddingStart="14dp"
+                        android:paddingTop="9dp"
+                        android:paddingEnd="14dp"
+                        android:paddingBottom="9dp"
+                        android:text="▶ 전체 이어받기"
+                        android:textColor="@color/accent"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        android:id="@+id/btnCancelAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_chip"
+                        android:paddingStart="14dp"
+                        android:paddingTop="9dp"
+                        android:paddingEnd="14dp"
+                        android:paddingBottom="9dp"
+                        android:text="■ 전체 중지"
+                        android:textColor="@color/danger"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        android:id="@+id/btnClearHistory"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_chip"
+                        android:paddingStart="14dp"
+                        android:paddingTop="9dp"
+                        android:paddingEnd="14dp"
+                        android:paddingBottom="9dp"
+                        android:text="완료 항목 지우기"
+                        android:textColor="@color/muted"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </HorizontalScrollView>
 
             <ScrollView
                 android:layout_width="match_parent"
@@ -238,7 +289,7 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
                     android:paddingStart="20dp"
-                    android:paddingTop="6dp"
+                    android:paddingTop="4dp"
                     android:paddingEnd="20dp"
                     android:paddingBottom="20dp" />
             </ScrollView>

@@ -13,10 +13,11 @@
     return (u && ((u.core && u.core.screen_name) || (u.legacy && u.legacy.screen_name))) || "";
   }
 
-  function collect(node, out, seen) {
+  // rtBy: 이 트윗을 리포스트한 계정 (타임라인의 리포스트는 원본 트윗이 retweeted_status_result 안에 들어 있음)
+  function collect(node, out, seen, rtBy) {
     if (!node || typeof node !== "object" || seen.has(node)) return;
     seen.add(node);
-    if (Array.isArray(node)) { node.forEach(function (n) { collect(n, out, seen); }); return; }
+    if (Array.isArray(node)) { node.forEach(function (n) { collect(n, out, seen, rtBy); }); return; }
     var media = node.legacy && node.legacy.extended_entities && node.legacy.extended_entities.media;
     if (node.rest_id && Array.isArray(media)) {
       var videos = [];
@@ -27,16 +28,25 @@
           .sort(function (a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
         if (mp4.length) videos.push({ url: mp4[0].url, gif: m.type === "animated_gif" });
       });
-      if (videos.length) out.push({ id: node.rest_id, user: screenName(node), videos: videos });
+      if (videos.length) out.push({ id: node.rest_id, user: screenName(node), videos: videos, rtBy: rtBy ? [rtBy] : [] });
     }
-    for (var k in node) collect(node[k], out, seen);
+    var isRt = node.legacy && node.legacy.retweeted_status_result;
+    var by = isRt ? screenName(node).toLowerCase() : "";
+    for (var k in node) collect(node[k], out, seen, k === "legacy" && by ? by : rtBy);
   }
 
   function handle(text) {
     try {
       var out = [];
-      collect(JSON.parse(text), out, new WeakSet());
-      if (out.length) { out.forEach(function (t) { tweets[t.id] = t; }); schedule(); }
+      collect(JSON.parse(text), out, new WeakSet(), "");
+      if (out.length) {
+        out.forEach(function (t) {
+          var old = tweets[t.id];
+          if (old) t.rtBy = old.rtBy.concat(t.rtBy.filter(function (u) { return old.rtBy.indexOf(u) < 0; }));
+          tweets[t.id] = t;
+        });
+        schedule();
+      }
     } catch (e) {}
   }
 
@@ -113,9 +123,11 @@
     var m = location.pathname.match(/^\/([A-Za-z0-9_]+)(?:\/(?:media|with_replies|highlights))?\/?$/);
     return m && RESERVED.indexOf(m[1].toLowerCase()) < 0 ? m[1] : null;
   }
+  var includeRt = true;
   function userVideos(user) {
+    var u = user.toLowerCase();
     return Object.keys(tweets).map(function (k) { return tweets[k]; })
-      .filter(function (t) { return t.user.toLowerCase() === user.toLowerCase(); });
+      .filter(function (t) { return t.user.toLowerCase() === u || (includeRt && t.rtBy.indexOf(u) >= 0); });
   }
 
   var panel = null, scrolling = false;
@@ -126,12 +138,16 @@
     if (!panel) {
       panel = document.createElement("div");
       panel.id = "xvd-panel";
-      panel.innerHTML = '<div class="info"></div><button class="alt" data-act="scan"></button><button data-act="dl"></button>';
+      panel.innerHTML = '<div class="info"></div><button class="alt" data-act="rt"></button><button class="alt" data-act="scan"></button><button data-act="dl"></button>';
       document.body.appendChild(panel);
       panel.addEventListener("click", onPanelClick);
     }
-    var n = userVideos(user).reduce(function (s, t) { return s + t.videos.length; }, 0);
-    panel.querySelector(".info").textContent = "@" + user + " 영상 " + n + "개 찾음";
+    var list = userVideos(user);
+    var n = list.reduce(function (s, t) { return s + t.videos.length; }, 0);
+    var rt = list.filter(function (t) { return t.user.toLowerCase() !== user.toLowerCase(); })
+      .reduce(function (s, t) { return s + t.videos.length; }, 0);
+    panel.querySelector(".info").textContent = "@" + user + " 영상 " + n + "개" + (rt ? " (리포스트 " + rt + ")" : "");
+    panel.querySelector('[data-act="rt"]').textContent = includeRt ? "리포스트 포함 ✓" : "리포스트 제외";
     panel.querySelector('[data-act="scan"]').textContent = scrolling ? "수집 중지" : "끝까지 스크롤하며 수집";
     var dl = panel.querySelector('[data-act="dl"]');
     dl.textContent = "전체 다운로드 (" + n + ")";
@@ -142,6 +158,7 @@
   async function onPanelClick(e) {
     var act = e.target.dataset && e.target.dataset.act, user = profileUser();
     if (!act || !user) return;
+    if (act === "rt") { includeRt = !includeRt; return renderPanel(); }
     if (act === "scan") {
       if (scrolling) { scrolling = false; return renderPanel(); }
       scrolling = true; renderPanel();

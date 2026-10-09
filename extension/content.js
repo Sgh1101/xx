@@ -6,7 +6,11 @@
 
   window.addEventListener("message", (e) => {
     if (e.source !== window || !e.data || !e.data.__xvd) return;
-    for (const t of e.data.tweets) tweets.set(t.id, t);
+    for (const t of e.data.tweets) {
+      const old = tweets.get(t.id);
+      if (old) t.rtBy = [...new Set([...old.rtBy, ...t.rtBy])];
+      tweets.set(t.id, t);
+    }
     scheduleRefresh();
   });
 
@@ -55,8 +59,10 @@
   }
 
   let panel, scrolling = false;
+  let includeRt = true; // 그 계정이 리포스트한 영상도 포함
   function userVideos(user) {
-    return [...tweets.values()].filter((t) => t.user.toLowerCase() === user.toLowerCase());
+    const u = user.toLowerCase();
+    return [...tweets.values()].filter((t) => t.user.toLowerCase() === u || (includeRt && t.rtBy.includes(u)));
   }
 
   function renderPanel() {
@@ -65,12 +71,15 @@
     if (!panel) {
       panel = document.createElement("div");
       panel.id = "xvd-panel";
-      panel.innerHTML = '<div class="info"></div><button class="alt" data-act="scan"></button><button data-act="dl"></button>';
+      panel.innerHTML = '<div class="info"></div><button class="alt" data-act="rt"></button><button class="alt" data-act="scan"></button><button data-act="dl"></button>';
       document.body.appendChild(panel);
       panel.addEventListener("click", onPanelClick);
     }
-    const n = userVideos(user).reduce((s, t) => s + t.videos.length, 0);
-    panel.querySelector(".info").textContent = `@${user} 영상 ${n}개 찾음`;
+    const list = userVideos(user);
+    const n = list.reduce((s, t) => s + t.videos.length, 0);
+    const rt = list.filter((t) => t.user.toLowerCase() !== user.toLowerCase()).reduce((s, t) => s + t.videos.length, 0);
+    panel.querySelector(".info").textContent = `@${user} 영상 ${n}개` + (rt ? ` (리포스트 ${rt})` : "");
+    panel.querySelector('[data-act="rt"]').textContent = includeRt ? "리포스트 포함 ✓" : "리포스트 제외";
     const scan = panel.querySelector('[data-act="scan"]');
     scan.textContent = scrolling ? "수집 중지" : "끝까지 스크롤하며 수집";
     const dl = panel.querySelector('[data-act="dl"]');
@@ -82,6 +91,7 @@
     const act = e.target.dataset && e.target.dataset.act;
     const user = profileUser();
     if (!act || !user) return;
+    if (act === "rt") { includeRt = !includeRt; return renderPanel(); }
     if (act === "scan") {
       if (scrolling) { scrolling = false; return renderPanel(); }
       scrolling = true;
