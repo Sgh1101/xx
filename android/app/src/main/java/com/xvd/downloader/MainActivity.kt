@@ -39,6 +39,9 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONArray
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -52,12 +55,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var results: LinearLayout
     private lateinit var hint: View
+    private lateinit var pageHistory: View
+    private lateinit var historyList: LinearLayout
 
     private val io = Executors.newCachedThreadPool()
     private val ui = Handler(Looper.getMainLooper())
     private var tab = 0
     private var webLoaded = false
     private var busy = false
+    private var historyBusy = false
+    private val historyTick = object : Runnable {
+        override fun run() {
+            if (tab == 2 && historyBusy) {
+                renderHistory()
+                ui.postDelayed(this, 1500)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,6 +86,8 @@ class MainActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         results = findViewById(R.id.results)
         hint = findViewById(R.id.hint)
+        pageHistory = findViewById(R.id.pageHistory)
+        historyList = findViewById(R.id.historyList)
 
         if (Build.VERSION.SDK_INT <= 28 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
@@ -81,6 +97,11 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.tabLink).setOnClickListener { selectTab(0) }
         findViewById<View>(R.id.tabWeb).setOnClickListener { selectTab(1) }
+        findViewById<View>(R.id.tabHistory).setOnClickListener { selectTab(2) }
+        findViewById<View>(R.id.btnClearHistory).setOnClickListener {
+            History.clear(this)
+            renderHistory()
+        }
         findViewById<View>(R.id.btnPaste).setOnClickListener { pasteFromClipboard() }
         btnFetch.setOnClickListener { fetch() }
         input.setOnEditorActionListener { _, actionId, _ ->
@@ -102,7 +123,7 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 when {
                     tab == 1 && webView.canGoBack() -> webView.goBack()
-                    tab == 1 -> selectTab(0)
+                    tab != 0 -> selectTab(0)
                     else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
                 }
             }
@@ -131,16 +152,21 @@ class MainActivity : AppCompatActivity() {
         tab = t
         pageLink.visibility = if (t == 0) View.VISIBLE else View.GONE
         pageWeb.visibility = if (t == 1) View.VISIBLE else View.GONE
-        styleTab(R.id.tabLinkIcon, R.id.tabLinkText, t == 0)
-        styleTab(R.id.tabWebIcon, R.id.tabWebText, t == 1)
+        pageHistory.visibility = if (t == 2) View.VISIBLE else View.GONE
+        styleTab(R.id.tabLink, R.id.tabLinkIcon, R.id.tabLinkText, t == 0)
+        styleTab(R.id.tabWeb, R.id.tabWebIcon, R.id.tabWebText, t == 1)
+        styleTab(R.id.tabHistory, R.id.tabHistoryIcon, R.id.tabHistoryText, t == 2)
         if (t == 1 && !webLoaded) {
             webLoaded = true
             webView.loadUrl("https://x.com/")
         }
+        ui.removeCallbacks(historyTick)
+        if (t == 2) renderHistory()
     }
 
-    private fun styleTab(iconId: Int, textId: Int, selected: Boolean) {
+    private fun styleTab(tabId: Int, iconId: Int, textId: Int, selected: Boolean) {
         val color = ContextCompat.getColor(this, if (selected) R.color.accent else R.color.muted)
+        findViewById<View>(tabId).setBackgroundResource(if (selected) R.drawable.bg_tab_selected else 0)
         findViewById<ImageView>(iconId).setColorFilter(color)
         findViewById<TextView>(textId).setTextColor(color)
     }
@@ -242,7 +268,8 @@ class MainActivity : AppCompatActivity() {
                 .setMimeType("video/mp4")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "X-Videos/$filename")
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
+            val dmId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
+            History.add(this, History.Entry(dmId, filename, System.currentTimeMillis()))
             toast("다운로드 시작: Download/X-Videos")
             true
         } catch (e: Exception) {
@@ -317,13 +344,81 @@ class MainActivity : AppCompatActivity() {
                         .setMimeType("video/mp4")
                         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                         .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "X-Videos/$name")
-                    (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
+                    val dmId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
+                    History.add(this@MainActivity, History.Entry(dmId, name, System.currentTimeMillis()))
                     started = true
                 } catch (_: Exception) {
                 }
                 if (started) ok++
             }
-            ui.post { toast("$ok/${arr.length()}개 다운로드 시작 (Download/X-Videos)") }
+            ui.post {
+                toast("$ok/${arr.length()}개 다운로드 시작 (Download/X-Videos)")
+                if (tab == 2) renderHistory()
+            }
+        }
+    }
+
+    // ---------------- 기록 ----------------
+
+    private fun statusOf(id: Long): Int {
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
+            if (c.moveToFirst()) return c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+        }
+        return -1
+    }
+
+    private fun renderHistory() {
+        val entries = History.load(this)
+        historyList.removeAllViews()
+        historyBusy = false
+        if (entries.isEmpty()) {
+            historyList.addView(TextView(this).apply {
+                text = "아직 받은 영상이 없어요"
+                setTextColor(ContextCompat.getColor(context, R.color.muted))
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(80), 0, 0)
+            })
+            return
+        }
+        val fmt = SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA)
+        entries.forEach { e ->
+            val st = statusOf(e.id)
+            val row = LayoutInflater.from(this).inflate(R.layout.item_history, historyList, false)
+            row.findViewById<TextView>(R.id.hTitle).text = e.name
+            row.findViewById<TextView>(R.id.hSub).text = fmt.format(Date(e.time))
+            val chip = row.findViewById<TextView>(R.id.hStatus)
+            val (label, colorRes) = when (st) {
+                DownloadManager.STATUS_SUCCESSFUL -> "▶ 재생" to R.color.accent
+                DownloadManager.STATUS_FAILED -> "실패" to R.color.danger
+                -1 -> "삭제됨" to R.color.muted
+                else -> { historyBusy = true; "받는 중…" to R.color.muted }
+            }
+            chip.text = label
+            chip.setTextColor(ContextCompat.getColor(this, colorRes))
+            row.setOnClickListener { if (st == DownloadManager.STATUS_SUCCESSFUL) openVideo(e.id) else if (st == -1) toast("파일이 없어요") }
+            row.setOnLongClickListener {
+                History.remove(this, e.id)
+                renderHistory()
+                true
+            }
+            historyList.addView(row)
+        }
+        if (historyBusy) ui.postDelayed(historyTick, 1500)
+    }
+
+    private fun openVideo(id: Long) {
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val uri = dm.getUriForDownloadedFile(id)
+        if (uri == null) { toast("파일을 열 수 없어요"); return }
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        } catch (e: Exception) {
+            toast("재생할 앱이 없어요")
         }
     }
 
