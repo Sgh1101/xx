@@ -6,6 +6,13 @@
 
   var tweets = {}; // id -> {id, user, media:[{kind:'video'|'photo', url, gif?, variants?}], rtBy:[]}
   var API_RE = /\/i\/api\/|\/graphql\//;
+  var mediaIndex = {}; // 썸네일/사진 주소의 미디어 키 -> 트윗 번호 (넘겨 보는 영상이 어느 게시물인지 찾기용)
+
+  // pbs.twimg.com/ext_tw_video_thumb/123/... → "123", pbs.twimg.com/media/ABC.jpg → "ABC"
+  function mediaKey(u) {
+    var m = (u || "").match(/pbs\.twimg\.com\/(?:media|[a-z_]+_thumb)\/([^\/.?]+)/);
+    return m ? m[1] : null;
+  }
   var ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 16l-5-5 1.4-1.4 2.6 2.6V3h2v9.2l2.6-2.6L17 11l-5 5zm-7 2h14v2H5v-2z"/></svg>';
 
   function screenName(node) {
@@ -22,6 +29,8 @@
     if (node.rest_id && Array.isArray(media)) {
       var items = [];
       media.forEach(function (m) {
+        var key = mediaKey(m.media_url_https);
+        if (key) mediaIndex[key] = node.rest_id;
         if (m.type === "photo" && m.media_url_https) {
           items.push({ kind: "photo", url: origPhoto(m.media_url_https) });
           return;
@@ -115,7 +124,7 @@
     s.textContent =
       ".xvd-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;border-radius:9999px;background:transparent;color:#8b98a5;}" +
       ".xvd-btn:active{background:rgba(77,163,255,.18);color:#4da3ff;}" +
-      "#xvd-pop{position:fixed;left:12px;bottom:84px;z-index:99999;padding:8px 14px;border-radius:9999px;border:1px solid #4da3ff;background:rgba(20,24,29,.94);color:#fff;font:700 13px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.55);}" +
+      "#xvd-pop{position:fixed;left:12px;bottom:84px;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:99999;padding:8px 14px;border-radius:9999px;border:1px solid #4da3ff;background:rgba(20,24,29,.94);color:#fff;font:700 13px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.55);}" +
       "#xvd-pop:active{background:#4da3ff;}" +
       "#xvd-panel{position:fixed;right:12px;bottom:84px;z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;font:600 14px system-ui,sans-serif;}" +
       "#xvd-panel button{padding:11px 16px;border:0;border-radius:9999px;color:#fff;font:700 14px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.5);background:linear-gradient(90deg,#3b82f6,#8b5cf6);}" +
@@ -150,7 +159,7 @@
 
   // ---- 지금 보고 있는 영상 트윗용 작은 팝업 ----
   function statusInfo(href) {
-    var m = (href || "").match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)/);
+    var m = (href || "").replace(/^https?:\/\/[^\/]+/, "").match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)/);
     return m ? { user: m[1], id: m[2] } : null;
   }
   function articleInfo(a) {
@@ -158,7 +167,51 @@
     var link = tm && tm.closest("a");
     return link && statusInfo(link.getAttribute("href"));
   }
+  function visibleArea(el) {
+    var r = el.getBoundingClientRect();
+    var w = Math.max(0, Math.min(r.right, window.innerWidth) - Math.max(r.left, 0));
+    var h = Math.max(0, Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0));
+    return w * h;
+  }
+  // 화면에서 가장 크게 보이는 영상 (재생 중이면 가산점)
+  function prominentVideo() {
+    var best = null, bestScore = 0, min = window.innerWidth * window.innerHeight * 0.12;
+    document.querySelectorAll("video").forEach(function (v) {
+      var area = visibleArea(v);
+      if (area < min) return;
+      var score = area * (v.paused ? 1 : 3);
+      if (score > bestScore) { best = v; bestScore = score; }
+    });
+    return best;
+  }
+  // 영상이 속한 게시물 찾기: ① 썸네일 번호 ② 감싸는 트윗 ③ 가까운 곳의 게시물 링크(하나뿐일 때만)
+  function tweetOfMedia(el) {
+    var id = mediaIndex[mediaKey(el.getAttribute("poster") || "")];
+    if (id && tweets[id]) return { id: id, user: tweets[id].user };
+    var a = el.closest('article[data-testid="tweet"]');
+    if (a) return articleInfo(a);
+    var p = el.parentElement;
+    for (var i = 0; p && i < 12; i++, p = p.parentElement) {
+      if (p.querySelector("article")) break; // 뒤에 깔린 다른 게시물까지 감싸는 범위면 중단
+      var ids = {}, first = null;
+      p.querySelectorAll('a[href*="/status/"]').forEach(function (l) {
+        var inf = statusInfo(l.getAttribute("href"));
+        if (inf) { ids[inf.id] = 1; first = first || inf; }
+      });
+      var n = Object.keys(ids).length;
+      if (n === 1) return first;
+      if (n > 1) break;
+    }
+    return null;
+  }
+
   function currentTweet() {
+    // 1) 지금 크게 보이는 영상 (쇼츠처럼 넘겨 보는 화면 포함)
+    var pv = prominentVideo();
+    if (pv) return tweetOfMedia(pv); // 못 찾으면 엉뚱한 게시물을 받지 않도록 팝업을 숨김
+    // 2) 사진 뷰어: 주소가 /status/번호/photo/N 으로 바뀜
+    var pm = location.pathname.match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)\/photo\//);
+    if (pm) return { user: pm[1], id: pm[2] };
     var m = location.pathname.match(/^\/([A-Za-z0-9_]+)\/status\/(\d+)/);
     var arts = document.querySelectorAll('article[data-testid="tweet"]');
     var i, a, info;
@@ -194,7 +247,7 @@
       pop.id = "xvd-pop";
       pop.addEventListener("click", function (e) {
         e.preventDefault(); e.stopPropagation();
-        var c = pop._cur;
+        var c = currentTweet() || pop._cur; // 누르는 순간 보고 있는 것 기준
         if (!c) return;
         var tw = tweets[c.id];
         if (tw) send(files(tw));
@@ -206,7 +259,7 @@
     pop.style.display = "";
     var tw = tweets[cur.id];
     var c = tw ? countKinds([tw]) : null;
-    pop.textContent = "⬇ 받기" + (c ? " (" + [c.v ? "영상 " + c.v : "", c.p ? "사진 " + c.p : ""].filter(Boolean).join(" · ") + ")" : "");
+    pop.textContent = "⬇ 받기  @" + cur.user + (c ? " · " + [c.v ? "영상 " + c.v : "", c.p ? "사진 " + c.p : ""].filter(Boolean).join(" · ") : "");
   }
   var lastScroll = 0;
   window.addEventListener("scroll", function () {
@@ -285,6 +338,7 @@
   }
   function start() {
     new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(function () { if (!document.hidden) renderPop(); }, 700);
     schedule();
   }
   if (document.documentElement) start();
