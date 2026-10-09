@@ -87,6 +87,14 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_GO) { fetch(); true } else false
         }
 
+        val prefs = getSharedPreferences("xvd", Context.MODE_PRIVATE)
+        val loginHint = findViewById<View>(R.id.loginHint)
+        loginHint.visibility = if (prefs.getBoolean("hint_closed", false)) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.loginHintClose).setOnClickListener {
+            loginHint.visibility = View.GONE
+            prefs.edit().putBoolean("hint_closed", true).apply()
+        }
+
         setupWebView()
         selectTab(0)
 

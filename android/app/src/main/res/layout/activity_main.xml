@@ -118,26 +118,64 @@
         </ScrollView>
 
         <!-- 탭 2: X 브라우저 -->
-        <FrameLayout
+        <LinearLayout
             android:id="@+id/pageWeb"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:orientation="vertical"
             android:visibility="gone">
 
-            <WebView
-                android:id="@+id/webView"
+            <LinearLayout
+                android:id="@+id/loginHint"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent" />
+                android:layout_height="wrap_content"
+                android:background="@color/surface"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="4dp"
+                android:paddingBottom="10dp">
 
-            <ProgressBar
-                android:id="@+id/progress"
-                style="?android:attr/progressBarStyleHorizontal"
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:lineSpacingExtra="2dp"
+                    android:text="구글 로그인은 앱 안에서 막혀 있어요.\n이메일/사용자명 + 비밀번호로 로그인하세요. 구글로 가입했다면 ‘비밀번호를 잊으셨나요?’로 비밀번호를 만들면 돼요."
+                    android:textColor="@color/muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/loginHintClose"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="@color/muted"
+                    android:textSize="16sp" />
+            </LinearLayout>
+
+            <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="3dp"
-                android:max="100"
-                android:progressTint="@color/accent"
-                android:visibility="gone" />
-        </FrameLayout>
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <WebView
+                    android:id="@+id/webView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <ProgressBar
+                    android:id="@+id/progress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="3dp"
+                    android:max="100"
+                    android:progressTint="@color/accent"
+                    android:visibility="gone" />
+            </FrameLayout>
+        </LinearLayout>
     </FrameLayout>
 
     <!-- 하단 탭바 -->
