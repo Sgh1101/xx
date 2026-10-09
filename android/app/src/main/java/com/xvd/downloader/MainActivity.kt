@@ -227,7 +227,7 @@ class MainActivity : AppCompatActivity() {
             val outcome = runCatching { TweetFetcher.fetch(id) }
             ui.post {
                 busy = false
-                btnFetch.text = "영상 가져오기"
+                btnFetch.text = "가져오기"
                 outcome.onSuccess { render(it) }
                     .onFailure { setStatus(it.message ?: "가져오기에 실패했어요.", error = true) }
             }
@@ -242,13 +242,13 @@ class MainActivity : AppCompatActivity() {
             val card = LayoutInflater.from(this).inflate(R.layout.item_video, results, false)
             card.findViewById<TextView>(R.id.title).text = tweet.text.ifBlank { "@${tweet.user}" }
             card.findViewById<TextView>(R.id.sub).text =
-                "@${tweet.user}" + if (media.gif) " · GIF" else ""
+                "@${tweet.user}" + when { media.photo -> " · 사진"; media.gif -> " · GIF"; else -> " · 영상" }
             val thumb = card.findViewById<ImageView>(R.id.thumb)
             media.thumb?.let { loadImage(it, thumb) }
 
             val box = card.findViewById<LinearLayout>(R.id.qualities)
             media.variants.forEach { v ->
-                val label = (if (v.height > 0) "${v.height}p" else "원본") +
+                val label = if (media.photo) "원본 사진" else (if (v.height > 0) "${v.height}p" else "원본") +
                     if (v.bitrate > 0) "  ·  %.1f Mbps".format(v.bitrate / 1_000_000.0) else ""
                 val b = TextView(this).apply {
                     text = "↓  $label"
@@ -262,7 +262,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     setOnClickListener {
                         val suffix = if (tweet.medias.size > 1) "_${idx + 1}" else ""
-                        download(v.url, "${tweet.user}_${tweet.id}$suffix.mp4")
+                        download(v.url, "${tweet.user}_${tweet.id}$suffix.${TweetFetcher.ext(v.url, media.photo)}")
                     }
                 }
                 box.addView(b)
@@ -271,13 +271,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 설정의 화질 규칙대로 영상마다 하나씩 골라 바로 받기 */
+    /** 설정의 화질 규칙대로 미디어마다 하나씩 골라 바로 받기 (사진은 원본) */
     private fun autoDownload(tweet: TweetFetcher.Tweet) {
         var added = 0
         tweet.medias.forEachIndexed { idx, media ->
             val v = Settings.pick(this, media.variants) ?: return@forEachIndexed
             val suffix = if (tweet.medias.size > 1) "_${idx + 1}" else ""
-            if (Downloads.enqueue(this, v.url, "${tweet.user}_${tweet.id}$suffix.mp4")) added++
+            if (Downloads.enqueue(this, v.url, "${tweet.user}_${tweet.id}$suffix.${TweetFetcher.ext(v.url, media.photo)}")) added++
         }
         toast(if (added > 0) "${added}개를 기록 탭에 추가했어요" else "이미 받았거나 받는 중이에요")
     }
@@ -354,7 +354,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class Bridge {
-        /** 팝업에서 호출: 가로챈 데이터가 없을 때 트윗 번호로 직접 영상을 찾아 받기 */
+        /** 팝업에서 호출: 가로챈 데이터가 없을 때 트윗 번호로 직접 영상·사진을 찾아 받기 */
         @JavascriptInterface
         fun downloadTweet(id: String, user: String) {
             if (!id.matches(Regex("\\d{5,25}"))) return
@@ -366,11 +366,11 @@ class MainActivity : AppCompatActivity() {
                     tw.medias.forEachIndexed { idx, media ->
                         val v = Settings.pick(this@MainActivity, media.variants) ?: return@forEachIndexed
                         val suffix = if (tw.medias.size > 1) "_${idx + 1}" else ""
-                        if (Downloads.enqueue(this@MainActivity, v.url, "${who}_${id}$suffix.mp4")) added++
+                        if (Downloads.enqueue(this@MainActivity, v.url, "${who}_${id}$suffix.${TweetFetcher.ext(v.url, media.photo)}")) added++
                     }
                     ui.post { toast(if (added > 0) "${added}개를 기록 탭에 추가했어요" else "이미 받았거나 받는 중이에요") }
                 }.onFailure { e ->
-                    ui.post { toast(e.message ?: "영상을 찾지 못했어요") }
+                    ui.post { toast(e.message ?: "미디어를 찾지 못했어요") }
                 }
             }
         }
@@ -382,6 +382,12 @@ class MainActivity : AppCompatActivity() {
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
                 val name = o.optString("filename").replace(Regex("[^A-Za-z0-9._-]"), "_")
+                if (name.isBlank()) continue
+                if (o.optString("kind") == "photo") {
+                    val url = o.optString("url")
+                    if (url.startsWith("https://pbs.twimg.com/media/") && Downloads.enqueue(this@MainActivity, url, name)) added++
+                    continue
+                }
                 val cands = ArrayList<TweetFetcher.Variant>()
                 val vs = o.optJSONArray("variants")
                 if (vs != null) {
@@ -438,7 +444,7 @@ class MainActivity : AppCompatActivity() {
             historyList.removeAllViews()
             if (list.isEmpty()) {
                 historyList.addView(TextView(this).apply {
-                    text = "아직 받은 영상이 없어요"
+                    text = "아직 받은 파일이 없어요"
                     setTextColor(ContextCompat.getColor(context, R.color.muted))
                     textSize = 14f
                     gravity = Gravity.CENTER
@@ -499,7 +505,7 @@ class MainActivity : AppCompatActivity() {
         if (uri == null) { toast("파일을 열 수 없어요. 잠시 후 다시 눌러 보세요"); return }
         try {
             startActivity(
-                Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4")
+                Intent(Intent.ACTION_VIEW).setDataAndType(uri, Downloads.mimeOf(t.name))
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             )
         } catch (e: Exception) {

@@ -368,13 +368,24 @@ object Downloads {
         }
     }
 
-    /** 앱 전용 폴더의 임시 파일을 공용 Download/X-Videos 로 옮기고 열 수 있는 uri 반환 */
+    fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        else -> "video/mp4"
+    }
+
+    /** 영상은 Download/X-Videos, 사진은 Download/X-Photos */
+    private fun folderOf(name: String) = if (mimeOf(name).startsWith("image/")) "X-Photos" else "X-Videos"
+
+    /** 앱 전용 폴더의 임시 파일을 공용 Download 폴더로 옮기고 열 수 있는 uri 반환 */
     private fun publish(t: Task, src: File): String? {
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, t.name)
-                put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/X-Videos")
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeOf(t.name))
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + folderOf(t.name))
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val resolver = app.contentResolver
@@ -387,14 +398,16 @@ object Downloads {
             src.delete()
             return uri.toString()
         }
-        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "X-Videos")
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folderOf(t.name))
         dir.mkdirs()
+        val base = t.name.substringBeforeLast('.')
+        val ext = t.name.substringAfterLast('.', "mp4")
         var dest = File(dir, t.name)
         var n = 1
-        while (dest.exists()) dest = File(dir, t.name.removeSuffix(".mp4") + " ($n++).mp4")
+        while (dest.exists()) dest = File(dir, "$base (${n++}).$ext")
         src.copyTo(dest, overwrite = true)
         src.delete()
-        MediaScannerConnection.scanFile(app, arrayOf(dest.path), arrayOf("video/mp4")) { _, uri ->
+        MediaScannerConnection.scanFile(app, arrayOf(dest.path), arrayOf(mimeOf(t.name))) { _, uri ->
             if (uri != null) { t.uri = uri.toString(); save(); changed(true) }
         }
         return null

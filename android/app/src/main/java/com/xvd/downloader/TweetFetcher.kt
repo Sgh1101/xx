@@ -4,17 +4,30 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** 로그인 없이 공개 트윗의 영상 주소를 가져온다 (X 공식 임베드용 syndication 엔드포인트). */
+/** 로그인 없이 공개 트윗의 영상·사진 주소를 가져온다 (X 공식 임베드용 syndication 엔드포인트). */
 object TweetFetcher {
 
     data class Variant(val url: String, val height: Int, val bitrate: Int)
-    data class Media(val thumb: String?, val gif: Boolean, val variants: List<Variant>)
+    data class Media(val thumb: String?, val gif: Boolean, val variants: List<Variant>, val photo: Boolean = false)
     data class Tweet(val id: String, val user: String, val text: String, val medias: List<Media>)
 
     private val ID_RE = Regex("""(?:x|twitter)\.com/[^/\s]+/status(?:es)?/(\d+)""")
     private val SIZE_RE = Regex("""/(\d{2,4})x(\d{2,4})/""")
 
     fun parseId(input: String): String? = ID_RE.find(input)?.groupValues?.get(1)
+
+    private val PHOTO_RE = Regex("""^(https://pbs\.twimg\.com/media/[^.?]+)\.(\w+)""")
+
+    /** https://pbs.twimg.com/media/ABC.jpg → ...ABC?format=jpg&name=orig (원본 화질) */
+    fun origPhoto(u: String): String =
+        PHOTO_RE.find(u)?.let { "${it.groupValues[1]}?format=${it.groupValues[2]}&name=orig" } ?: u
+
+    /** 저장할 파일 확장자 */
+    fun ext(url: String, photo: Boolean): String {
+        if (!photo) return "mp4"
+        return (Regex("format=(\\w+)").find(url) ?: Regex("\\.(\\w+)(?:\\?|$)").find(url))
+            ?.groupValues?.get(1)?.lowercase() ?: "jpg"
+    }
 
     /** 임베드 서버가 요구하는 토큰 (react-tweet 방식). */
     private fun token(id: String): String {
@@ -50,6 +63,11 @@ object TweetFetcher {
             if (arr != null) {
                 for (i in 0 until arr.length()) {
                     val m = arr.getJSONObject(i)
+                    if (m.optString("type") == "photo") {
+                        val src = m.optString("media_url_https")
+                        if (src.isNotEmpty()) medias.add(Media(src, false, listOf(Variant(origPhoto(src), 0, 0)), photo = true))
+                        continue
+                    }
                     val info = m.optJSONObject("video_info") ?: continue
                     val vs = info.optJSONArray("variants") ?: continue
                     val list = ArrayList<Variant>()
@@ -67,7 +85,7 @@ object TweetFetcher {
                     }
                 }
             }
-            if (medias.isEmpty()) throw IllegalStateException("이 트윗에는 영상이 없어요.")
+            if (medias.isEmpty()) throw IllegalStateException("이 트윗에는 영상이나 사진이 없어요.")
             val user = json.optJSONObject("user")?.optString("screen_name").orEmpty()
             return Tweet(id, user, json.optString("text"), medias)
         } finally {
