@@ -26,6 +26,10 @@ object Settings {
     fun autoStart(c: Context) = p(c).getBoolean("auto_start", false)
     fun setAutoStart(c: Context, v: Boolean) = p(c).edit().putBoolean("auto_start", v).apply()
 
+    /** X 탭 떠 있는 다운로드 버튼 크기(px 기준 dp) */
+    fun popSize(c: Context) = p(c).getInt("pop_size", 36)
+    fun setPopSize(c: Context, v: Int) = p(c).edit().putInt("pop_size", v).apply()
+
     /** 화질 설정에 맞는 변형 고르기 */
     fun pick(c: Context, list: List<TweetFetcher.Variant>): TweetFetcher.Variant? {
         if (list.isEmpty()) return null

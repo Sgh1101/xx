@@ -354,6 +354,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class Bridge {
+        @JavascriptInterface
+        fun popSize(): Int = Settings.popSize(this@MainActivity)
+
         /** 팝업에서 호출: 가로챈 데이터가 없을 때 트윗 번호로 직접 영상·사진을 찾아 받기 */
         @JavascriptInterface
         fun downloadTweet(id: String, user: String) {
@@ -565,6 +568,21 @@ class MainActivity : AppCompatActivity() {
             findViewById(R.id.segQuality), listOf("최대", "1080p", "720p", "480p"),
             qValues.indexOf(Settings.quality(this)).coerceAtLeast(0)
         ) { Settings.setQuality(this, qValues[it]) }
+
+        val pValues = listOf(30, 36, 44)
+        segmented(
+            findViewById(R.id.segPopSize), listOf("아주 작게", "작게", "보통"),
+            pValues.indexOf(Settings.popSize(this)).let { if (it < 0) 1 else it }
+        ) {
+            Settings.setPopSize(this, pValues[it])
+            webView.evaluateJavascript("window.__xvdSetSize&&window.__xvdSetSize(${pValues[it]})", null)
+        }
+        findViewById<View>(R.id.btnResetPos).setOnClickListener {
+            webView.evaluateJavascript(
+                "try{localStorage.removeItem('xvd-pop-pos')}catch(e){};window.__xvdResetPos&&window.__xvdResetPos()", null
+            )
+            toast("버튼을 왼쪽 아래로 돌려놨어요")
+        }
 
         val cValues = listOf(1, 2, 3, 5)
         segmented(

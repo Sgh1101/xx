@@ -124,8 +124,12 @@
     s.textContent =
       ".xvd-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;border-radius:9999px;background:transparent;color:#8b98a5;}" +
       ".xvd-btn:active{background:rgba(77,163,255,.18);color:#4da3ff;}" +
-      "#xvd-pop{position:fixed;left:12px;bottom:84px;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:99999;padding:8px 14px;border-radius:9999px;border:1px solid #4da3ff;background:rgba(20,24,29,.94);color:#fff;font:700 13px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.55);}" +
-      "#xvd-pop:active{background:#4da3ff;}" +
+      "#xvd-pop{position:fixed;z-index:99999;display:flex;align-items:center;justify-content:center;padding:0;border-radius:50%;border:1.5px solid #4da3ff;background:rgba(20,24,29,.9);color:#fff;box-shadow:0 3px 10px rgba(0,0,0,.5);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;}" +
+      "#xvd-pop.drag{opacity:.75;transform:scale(1.12);}" +
+      "#xvd-pop.press{background:#4da3ff;}" +
+      "#xvd-pop svg{width:55%;height:55%;fill:currentColor;pointer-events:none;}" +
+      "#xvd-pop .n{position:absolute;top:-4px;right:-4px;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:#8b5cf6;color:#fff;font:700 10px/15px system-ui,sans-serif;text-align:center;pointer-events:none;}" +
+      "#xvd-tip{position:fixed;z-index:99999;padding:4px 9px;border-radius:9999px;background:rgba(11,13,16,.88);border:1px solid #262c34;color:#e7e9ea;font:600 11px system-ui,sans-serif;white-space:nowrap;pointer-events:none;transition:opacity .25s;}" +
       "#xvd-panel{position:fixed;right:12px;bottom:84px;z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;font:600 14px system-ui,sans-serif;}" +
       "#xvd-panel button{padding:11px 16px;border:0;border-radius:9999px;color:#fff;font:700 14px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.5);background:linear-gradient(90deg,#3b82f6,#8b5cf6);}" +
       "#xvd-panel button.alt{background:#1c2128;border:1px solid #262c34;}" +
@@ -237,29 +241,127 @@
     return best;
   }
 
-  var pop = null;
+  // ---- 떠 있는 다운로드 버튼: 작고, 끌어서 원하는 곳에 둘 수 있음 (위치는 저장) ----
+  var pop = null, tip = null, tipTimer = 0, lastTarget = "";
+  var POS_KEY = "xvd-pop-pos";
+  function popSize() {
+    try { return (window.XVDBridge && window.XVDBridge.popSize && window.XVDBridge.popSize()) || 36; } catch (e) { return 36; }
+  }
+  function clampPlace(x, y) {
+    var s = pop.offsetWidth || popSize();
+    x = Math.max(4, Math.min(window.innerWidth - s - 4, x));
+    y = Math.max(4, Math.min(window.innerHeight - s - 4, y));
+    pop.style.left = x + "px";
+    pop.style.top = y + "px";
+  }
+  function loadPos() {
+    var p = null;
+    try { p = JSON.parse(localStorage.getItem(POS_KEY) || "null"); } catch (e) {}
+    if (p && typeof p.x === "number") clampPlace(p.x, p.y);
+    else clampPlace(12, window.innerHeight - 84 - popSize()); // 기본: 왼쪽 아래
+  }
+  function savePos() {
+    try { localStorage.setItem(POS_KEY, JSON.stringify({ x: pop.offsetLeft, y: pop.offsetTop })); } catch (e) {}
+  }
+  function applySize(n) {
+    if (!pop) return;
+    pop.style.width = pop.style.height = n + "px";
+    clampPlace(pop.offsetLeft, pop.offsetTop);
+  }
+  // 앱 설정 화면에서 호출
+  window.__xvdResetPos = function () {
+    try { localStorage.removeItem(POS_KEY); } catch (e) {}
+    if (pop) loadPos();
+  };
+  window.__xvdSetSize = function (n) { applySize(n); };
+
+  function showTip(text, ms) {
+    if (!pop || pop.style.display === "none") return;
+    if (!tip) { tip = document.createElement("div"); tip.id = "xvd-tip"; document.body.appendChild(tip); }
+    tip.textContent = text;
+    tip.style.opacity = "1";
+    tip.style.display = "";
+    var r = pop.getBoundingClientRect();
+    var left = r.right + 6;
+    if (left + tip.offsetWidth > window.innerWidth - 4) left = r.left - 6 - tip.offsetWidth; // 오른쪽 끝이면 왼쪽에
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = (r.top + r.height / 2 - tip.offsetHeight / 2) + "px";
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(function () { tip.style.opacity = "0"; }, ms || 1400);
+  }
+
+  function doDownload() {
+    var c = currentTweet() || pop._cur; // 누르는 순간 보고 있는 것 기준
+    if (!c) return;
+    var tw = tweets[c.id];
+    if (tw) send(files(tw));
+    else if (window.XVDBridge) window.XVDBridge.downloadTweet(c.id, c.user); // 가로채기 실패 시 앱이 직접 찾아서 받음
+    showTip("@" + c.user + " 받는 중…", 1500);
+  }
+
+  function createPop() {
+    pop = document.createElement("div");
+    pop.id = "xvd-pop";
+    pop.innerHTML = ICON + '<span class="n" style="display:none"></span>';
+    document.body.appendChild(pop);
+    var n = popSize();
+    pop.style.width = pop.style.height = n + "px";
+    loadPos();
+
+    // 살짝 누르면 다운로드, 끌면 이동
+    var drag = null;
+    pop.addEventListener("pointerdown", function (e) {
+      e.preventDefault(); e.stopPropagation();
+      drag = { x: e.clientX, y: e.clientY, l: pop.offsetLeft, t: pop.offsetTop, moved: false };
+      pop.classList.add("press");
+      try { pop.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    pop.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 8) return;
+      if (!drag.moved) { drag.moved = true; pop.classList.remove("press"); pop.classList.add("drag"); }
+      e.preventDefault();
+      clampPlace(drag.l + dx, drag.t + dy);
+      if (tip) tip.style.opacity = "0";
+    });
+    function end(e, cancel) {
+      if (!drag) return;
+      var moved = drag.moved;
+      drag = null;
+      pop.classList.remove("press", "drag");
+      e.preventDefault(); e.stopPropagation();
+      if (moved) savePos();
+      else if (!cancel) doDownload();
+    }
+    pop.addEventListener("pointerup", function (e) { end(e, false); });
+    pop.addEventListener("pointercancel", function (e) { end(e, true); });
+    // X 화면이 버튼 터치를 가로채지 않도록
+    ["click", "touchstart", "touchend", "mousedown", "mouseup"].forEach(function (ev) {
+      pop.addEventListener(ev, function (e) { e.stopPropagation(); if (ev === "click") e.preventDefault(); }, { passive: false });
+    });
+    window.addEventListener("resize", function () { if (pop) clampPlace(pop.offsetLeft, pop.offsetTop); });
+  }
+
   function renderPop() {
     var cur = currentTweet();
-    if (!cur) { if (pop) pop.style.display = "none"; return; }
+    if (!cur) { if (pop) pop.style.display = "none"; if (tip) tip.style.opacity = "0"; return; }
     if (!document.body) return;
-    if (!pop) {
-      pop = document.createElement("button");
-      pop.id = "xvd-pop";
-      pop.addEventListener("click", function (e) {
-        e.preventDefault(); e.stopPropagation();
-        var c = currentTweet() || pop._cur; // 누르는 순간 보고 있는 것 기준
-        if (!c) return;
-        var tw = tweets[c.id];
-        if (tw) send(files(tw));
-        else if (window.XVDBridge) window.XVDBridge.downloadTweet(c.id, c.user); // 가로채기 실패 시 앱이 직접 찾아서 받음
-      });
-      document.body.appendChild(pop);
-    }
+    if (!pop) createPop();
     pop._cur = cur;
+    var wasHidden = pop.style.display === "none";
     pop.style.display = "";
     var tw = tweets[cur.id];
     var c = tw ? countKinds([tw]) : null;
-    pop.textContent = "⬇ 받기  @" + cur.user + (c ? " · " + [c.v ? "영상 " + c.v : "", c.p ? "사진 " + c.p : ""].filter(Boolean).join(" · ") : "");
+    var total = c ? c.v + c.p : 0;
+    var badge = pop.querySelector(".n");
+    badge.style.display = total > 1 ? "" : "none";
+    badge.textContent = total;
+    // 대상이 바뀌면 누구 게시물인지 잠깐 표시
+    if (cur.id !== lastTarget || wasHidden) {
+      lastTarget = cur.id;
+      showTip("@" + cur.user + (c ? " · " + [c.v ? "영상 " + c.v : "", c.p ? "사진 " + c.p : ""].filter(Boolean).join(" · ") : ""));
+    }
   }
   var lastScroll = 0;
   window.addEventListener("scroll", function () {
