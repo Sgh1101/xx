@@ -125,6 +125,20 @@
             android:orientation="vertical"
             android:visibility="gone">
 
+            <TextView
+                android:id="@+id/webviewWarn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/surface2"
+                android:lineSpacingExtra="2dp"
+                android:paddingStart="16dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="10dp"
+                android:textColor="@color/danger"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
             <LinearLayout
                 android:id="@+id/loginHint"
                 android:layout_width="match_parent"
@@ -591,6 +605,14 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
                     android:text="저장 위치: 내 파일 → Download → X-Videos (영상) · X-Photos (사진)"
+                    android:textColor="@color/muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/webviewInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
                     android:textColor="@color/muted"
                     android:textSize="12sp" />
             </LinearLayout>

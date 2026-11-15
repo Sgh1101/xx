@@ -2,6 +2,8 @@
 // API 응답을 가로채 영상 mp4 / 원본 사진 주소를 모으고, 트윗마다 버튼 + 프로필 일괄 다운로드 패널을 단다.
 (function () {
   if (window.__xvdLoaded) return;
+  // 로그인/계정 화면에서는 X 원래 코드만 돌도록 아무것도 하지 않음
+  if (/^\/(i\/flow\/|login|logout|account\/|i\/oauth2|i\/sso)/.test(location.pathname)) return;
   window.__xvdLoaded = true;
 
   var tweets = {}; // id -> {id, user, media:[{kind:'video'|'photo', url, gif?, variants?}], rtBy:[]}

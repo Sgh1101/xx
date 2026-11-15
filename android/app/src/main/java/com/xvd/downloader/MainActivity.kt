@@ -35,6 +35,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONArray
@@ -45,6 +46,11 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        /** 이보다 오래된 WebView 는 업데이트 안내 */
+        private const val MIN_WEBVIEW = 120
+    }
 
     private lateinit var pageLink: View
     private lateinit var pageWeb: View
@@ -66,6 +72,9 @@ class MainActivity : AppCompatActivity() {
     private var webLoaded = false
     private var busy = false
     private var renderedSig = ""
+    private var xvdScript = ""
+    private var useDocStart = false
+    private var scriptHandler: ScriptHandler? = null
     private val historyListener: () -> Unit = { if (tab == 2) renderHistory(false) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,6 +131,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupWebView()
+        checkWebViewVersion()
         setupSettings()
         selectTab(0)
 
@@ -313,14 +323,9 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
         webView.addJavascriptInterface(Bridge(), "XVDBridge")
-        val script = assets.open("xvd.js").bufferedReader().use { it.readText() }
-        val useDocStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
-        if (useDocStart) {
-            WebViewCompat.addDocumentStartJavaScript(
-                webView, script,
-                setOf("https://x.com", "https://www.x.com", "https://mobile.x.com", "https://twitter.com", "https://mobile.twitter.com")
-            )
-        }
+        xvdScript = assets.open("xvd.js").bufferedReader().use { it.readText() }
+        useDocStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+        syncInjection(reloadIfAdded = false)
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -335,7 +340,16 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                if (!useDocStart) view.evaluateJavascript(script, null)
+                if (!useDocStart && isLoggedIn()) view.evaluateJavascript(xvdScript, null)
+            }
+
+            // 로그인 직후(주소가 바뀔 때) 스크립트를 켜고 한 번 새로고침
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                syncInjection(reloadIfAdded = true)
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                syncInjection(reloadIfAdded = true)
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
@@ -347,6 +361,57 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** xvd.js 가 호출하는 다리. X 페이지에서 오는 호출이므로 주소를 엄격히 검증한다. */
+    private fun isLoggedIn(): Boolean =
+        CookieManager.getInstance().getCookie("https://x.com")?.contains("auth_token=") == true
+
+    /**
+     * 다운로드용 스크립트는 로그인한 뒤에만 넣는다.
+     * 로그인 화면에서는 X 원래 코드만 돌게 해서 로그인 과정에 끼어들지 않도록 함.
+     */
+    private fun syncInjection(reloadIfAdded: Boolean) {
+        if (!useDocStart) return
+        if (isLoggedIn()) {
+            if (scriptHandler == null) {
+                scriptHandler = WebViewCompat.addDocumentStartJavaScript(
+                    webView, xvdScript,
+                    setOf("https://x.com", "https://www.x.com", "https://mobile.x.com", "https://twitter.com", "https://mobile.twitter.com")
+                )
+                if (reloadIfAdded) webView.reload()
+            }
+        } else {
+            scriptHandler?.remove()
+            scriptHandler = null
+        }
+    }
+
+    /** 폰의 WebView(앱 속 브라우저 부품)가 오래되면 X 화면이 깨지고 로그인 버튼이 먹통이 됨 → 업데이트 안내 */
+    private fun checkWebViewVersion() {
+        val pkg = WebViewCompat.getCurrentWebViewPackage(this)
+        val info = findViewById<TextView>(R.id.webviewInfo)
+        if (pkg == null) {
+            info.text = "WebView 정보를 읽을 수 없어요"
+            return
+        }
+        val ver = pkg.versionName.orEmpty()
+        val major = ver.substringBefore('.').toIntOrNull() ?: 0
+        info.text = "WebView 버전: $ver (${pkg.packageName})"
+        if (major in 1 until MIN_WEBVIEW) {
+            val warn = findViewById<TextView>(R.id.webviewWarn)
+            warn.text = "⚠ 이 폰의 WebView가 오래됐어요 (버전 $major). X 화면이 깨지고 로그인이 안 될 수 있어요.\n" +
+                "여기를 눌러 ‘Android System WebView’를 업데이트한 뒤 앱을 다시 켜 주세요."
+            warn.visibility = View.VISIBLE
+            warn.setOnClickListener { openStore(pkg.packageName) }
+        }
+    }
+
+    private fun openStore(packageName: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")))
+        } catch (e: Exception) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$packageName")))
+        }
+    }
+
     private fun variantOf(url: String, bitrate: Int): TweetFetcher.Variant {
         val m = Regex("""/(\d{2,4})x(\d{2,4})/""").find(url)
         val h = m?.let { minOf(it.groupValues[1].toInt(), it.groupValues[2].toInt()) } ?: 0
