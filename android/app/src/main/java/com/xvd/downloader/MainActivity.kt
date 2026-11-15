@@ -316,7 +316,8 @@ class MainActivity : AppCompatActivity() {
         val s = webView.settings
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
-        s.mediaPlaybackRequiresUserGesture = true
+        // true 면 '방금 화면을 만진 경우'에만 재생이 허용돼서, 넘겨 볼 때 자동재생이 됐다 안 됐다 함
+        s.mediaPlaybackRequiresUserGesture = false
         // 로그인 화면이 막히지 않도록 일반 모바일 크롬처럼 보이게 함
         s.userAgentString = s.userAgentString.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+ "), "")
         CookieManager.getInstance().setAcceptCookie(true)

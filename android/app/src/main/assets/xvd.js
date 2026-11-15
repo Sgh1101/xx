@@ -438,11 +438,11 @@
   var timer;
   function schedule() {
     clearTimeout(timer);
-    timer = setTimeout(function () { addStyle(); decorate(); renderPanel(); renderPop(); }, 150);
+    timer = setTimeout(function () { addStyle(); decorate(); renderPanel(); renderPop(); }, 300);
   }
   function start() {
     new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(function () { if (!document.hidden) renderPop(); }, 700);
+    setInterval(function () { if (!document.hidden) renderPop(); }, 1000); // 오래된 폰에서도 부담 적게
     schedule();
   }
   if (document.documentElement) start();
